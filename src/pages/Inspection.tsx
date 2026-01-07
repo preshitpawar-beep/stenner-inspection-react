@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { doc, setDoc, getDoc, Timestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../firebase/firebase";
@@ -9,14 +9,24 @@ const COMPLETE_PASSWORD = "Stenner@Complete";
 interface InspectionProps {
   machineId: string;
   machineType: string;
+  onBack?: () => void;
 }
 
-export default function Inspection({ machineId, machineType }: InspectionProps) {
+export default function Inspection({
+  machineId,
+  machineType,
+  onBack
+}: InspectionProps) {
   const [template, setTemplate] = useState<any>(null);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [status, setStatus] = useState<"draft" | "completed">("draft");
   const [photos, setPhotos] = useState<string[]>([]);
+  const [typedSignature, setTypedSignature] = useState("");
+  const [drawnSignatureUrl, setDrawnSignatureUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawing = useRef(false);
 
   const inspectionRef = doc(
     db,
@@ -41,18 +51,23 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
       setAnswers(data.answers || {});
       setStatus(data.status || "draft");
       setPhotos(data.photos || []);
+      setTypedSignature(data.typedSignature || "");
+      setDrawnSignatureUrl(data.drawnSignatureUrl || null);
     }
   };
 
-  const saveInspection = async (updatedAnswers: Record<string, any>) => {
+  const saveInspection = async (extra: any = {}) => {
     await setDoc(
       inspectionRef,
       {
         machineType,
-        answers: updatedAnswers,
+        answers,
         status,
         photos,
-        updatedOn: Timestamp.now()
+        typedSignature,
+        drawnSignatureUrl,
+        updatedOn: Timestamp.now(),
+        ...extra
       },
       { merge: true }
     );
@@ -60,243 +75,202 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
 
   const updateAnswer = (key: string, value: any) => {
     if (status === "completed") return;
-
     const updated = { ...answers, [key]: value };
     setAnswers(updated);
-    saveInspection(updated);
+    setDoc(
+      inspectionRef,
+      { answers: updated, updatedOn: Timestamp.now() },
+      { merge: true }
+    );
   };
 
+  /* -------------------- PHOTO UPLOAD -------------------- */
   const uploadPhoto = async (file: File) => {
     setUploading(true);
-
     const fileRef = ref(
       storage,
-      `machines/${machineId}/inspections/${machineType}/${Date.now()}_${file.name}`
+      `machines/${machineId}/inspections/${machineType}/photos/${Date.now()}_${file.name}`
     );
-
     await uploadBytes(fileRef, file);
     const url = await getDownloadURL(fileRef);
-
     const updatedPhotos = [...photos, url];
     setPhotos(updatedPhotos);
+    await setDoc(
+      inspectionRef,
+      { photos: updatedPhotos, updatedOn: Timestamp.now() },
+      { merge: true }
+    );
+    setUploading(false);
+  };
+
+  /* -------------------- SIGNATURE (DRAW) -------------------- */
+  const startDraw = (e: any) => {
+    if (status === "completed") return;
+    drawing.current = true;
+    draw(e);
+  };
+
+  const endDraw = () => {
+    drawing.current = false;
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) ctx.beginPath();
+  };
+
+  const draw = (e: any) => {
+    if (!drawing.current || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const ctx = canvasRef.current.getContext("2d");
+    if (!ctx) return;
+
+    const x = (e.clientX || e.touches[0].clientX) - rect.left;
+    const y = (e.clientY || e.touches[0].clientY) - rect.top;
+
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#000";
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+
+  const clearSignature = () => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, 400, 150);
+  };
+
+  const saveDrawnSignature = async () => {
+    if (!canvasRef.current) return;
+    setUploading(true);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvasRef.current!.toBlob(resolve)
+    );
+    if (!blob) return;
+
+    const sigRef = ref(
+      storage,
+      `machines/${machineId}/inspections/${machineType}/signature.png`
+    );
+
+    await uploadBytes(sigRef, blob);
+    const url = await getDownloadURL(sigRef);
+    setDrawnSignatureUrl(url);
 
     await setDoc(
       inspectionRef,
-      {
-        photos: updatedPhotos,
-        updatedOn: Timestamp.now()
-      },
+      { drawnSignatureUrl: url, updatedOn: Timestamp.now() },
       { merge: true }
     );
 
     setUploading(false);
   };
 
+  /* -------------------- COMPLETE / REOPEN -------------------- */
   const completeInspection = async () => {
     const pwd = prompt("Enter password to complete inspection:");
-    if (pwd !== COMPLETE_PASSWORD) {
-      alert("Incorrect password");
-      return;
-    }
-
+    if (pwd !== COMPLETE_PASSWORD) return alert("Incorrect password");
     setStatus("completed");
-    await setDoc(
-      inspectionRef,
-      {
-        status: "completed",
-        completedOn: Timestamp.now()
-      },
-      { merge: true }
-    );
+    await saveInspection({ status: "completed", completedOn: Timestamp.now() });
   };
 
   const reopenInspection = async () => {
     const pwd = prompt("Enter password to reopen inspection:");
-    if (pwd !== COMPLETE_PASSWORD) {
-      alert("Incorrect password");
-      return;
-    }
-
+    if (pwd !== COMPLETE_PASSWORD) return alert("Incorrect password");
     setStatus("draft");
-    await setDoc(
-      inspectionRef,
-      {
-        status: "draft",
-        reopenedOn: Timestamp.now()
-      },
-      { merge: true }
-    );
+    await saveInspection({ status: "draft", reopenedOn: Timestamp.now() });
   };
 
-  if (!template) {
-    return (
-      <div className="container">
-        <p>No inspection template found.</p>
-      </div>
-    );
-  }
+  if (!template) return <div className="container">Loading…</div>;
 
   return (
     <div className="container">
+      {onBack && (
+        <button className="mb-2" onClick={onBack}>
+          ← Back
+        </button>
+      )}
+
       <div className="card">
         <h2>{template.title}</h2>
-
         <p className="text-muted">
           Status: <strong>{status.toUpperCase()}</strong>
         </p>
 
-        {status === "draft" && (
-          <button className="mt-2" onClick={completeInspection}>
-            Complete Inspection
-          </button>
-        )}
-
-        {status === "completed" && (
-          <button className="mt-2" onClick={reopenInspection}>
-            Reopen Inspection
-          </button>
+        {status === "draft" ? (
+          <button onClick={completeInspection}>Complete Inspection</button>
+        ) : (
+          <button onClick={reopenInspection}>Reopen Inspection</button>
         )}
       </div>
 
-      {/* PHOTO UPLOAD */}
+      {/* SIGNATURES */}
+      <div className="card">
+        <h3>Signatures</h3>
+
+        <label>Typed Signature (Name)</label>
+        <input
+          type="text"
+          disabled={status === "completed"}
+          value={typedSignature}
+          onChange={(e) => {
+            setTypedSignature(e.target.value);
+            saveInspection({ typedSignature: e.target.value });
+          }}
+        />
+
+        <label className="mt-2">Drawn Signature</label>
+
+        {drawnSignatureUrl && (
+          <img
+            src={drawnSignatureUrl}
+            alt="Signature"
+            style={{ maxWidth: 300, display: "block", marginBottom: 8 }}
+          />
+        )}
+
+        {status === "draft" && (
+          <>
+            <canvas
+              ref={canvasRef}
+              width={400}
+              height={150}
+              style={{ border: "1px solid #ccc" }}
+              onMouseDown={startDraw}
+              onMouseUp={endDraw}
+              onMouseMove={draw}
+              onTouchStart={startDraw}
+              onTouchEnd={endDraw}
+              onTouchMove={draw}
+            />
+            <div className="mt-2">
+              <button onClick={clearSignature}>Clear</button>{" "}
+              <button onClick={saveDrawnSignature} disabled={uploading}>
+                Save Signature
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* PHOTOS */}
       <div className="card">
         <h3>Inspection Photos</h3>
-
         {status === "draft" && (
           <input
             type="file"
             accept="image/*"
-            disabled={uploading}
-            onChange={(e) => {
-              if (e.target.files?.[0]) {
-                uploadPhoto(e.target.files[0]);
-              }
-            }}
+            onChange={(e) =>
+              e.target.files && uploadPhoto(e.target.files[0])
+            }
           />
         )}
-
-        {uploading && <p className="text-muted">Uploading photo…</p>}
-
-        {photos.length === 0 && (
-          <p className="text-muted">No photos uploaded.</p>
-        )}
-
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {photos.map((url, i) => (
-            <img
-              key={i}
-              src={url}
-              alt="Inspection"
-              style={{
-                width: 120,
-                height: 120,
-                objectFit: "cover",
-                borderRadius: 8,
-                border: "1px solid #e5e7eb"
-              }}
-            />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {photos.map((p, i) => (
+            <img key={i} src={p} style={{ width: 100 }} />
           ))}
         </div>
       </div>
-
-      {template.sections.map((section: any) => (
-        <div key={section.title} className="card">
-          <h3>{section.title}</h3>
-
-          {section.fields.map((field: any) => (
-            <div key={field.key} className="mt-2">
-              <label>{field.label}</label>
-
-              {field.type === "text" && (
-                <input
-                  type="text"
-                  disabled={status === "completed"}
-                  value={answers[field.key] || ""}
-                  onChange={(e) =>
-                    updateAnswer(field.key, e.target.value)
-                  }
-                />
-              )}
-
-              {field.type === "number" && (
-                <input
-                  type="number"
-                  disabled={status === "completed"}
-                  value={answers[field.key] || ""}
-                  onChange={(e) =>
-                    updateAnswer(field.key, e.target.value)
-                  }
-                />
-              )}
-
-              {field.type === "checkbox" && (
-                <input
-                  type="checkbox"
-                  disabled={status === "completed"}
-                  checked={answers[field.key] || false}
-                  onChange={(e) =>
-                    updateAnswer(field.key, e.target.checked)
-                  }
-                  style={{ width: "auto" }}
-                />
-              )}
-
-              {field.type === "group" &&
-                field.parts.map((part: any) => {
-                  const compoundKey = `${field.key}.${part.sub}`;
-                  return (
-                    <div key={compoundKey} className="mt-2">
-                      <label>{part.label}</label>
-
-                      {part.type === "text" && (
-                        <input
-                          type="text"
-                          disabled={status === "completed"}
-                          value={answers[compoundKey] || ""}
-                          onChange={(e) =>
-                            updateAnswer(
-                              compoundKey,
-                              e.target.value
-                            )
-                          }
-                        />
-                      )}
-
-                      {part.type === "number" && (
-                        <input
-                          type="number"
-                          disabled={status === "completed"}
-                          value={answers[compoundKey] || ""}
-                          onChange={(e) =>
-                            updateAnswer(
-                              compoundKey,
-                              e.target.value
-                            )
-                          }
-                        />
-                      )}
-
-                      {part.type === "checkbox" && (
-                        <input
-                          type="checkbox"
-                          disabled={status === "completed"}
-                          checked={answers[compoundKey] || false}
-                          onChange={(e) =>
-                            updateAnswer(
-                              compoundKey,
-                              e.target.checked
-                            )
-                          }
-                          style={{ width: "auto" }}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
-          ))}
-        </div>
-      ))}
     </div>
   );
 }
