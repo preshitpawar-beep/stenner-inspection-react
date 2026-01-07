@@ -3,6 +3,8 @@ import { doc, setDoc, getDoc, Timestamp } from "firebase/firestore";
 import { db } from "../firebase/firebase";
 import { ST100R_TEMPLATE } from "../templates/st100r";
 
+const COMPLETE_PASSWORD = "Stenner@Complete";
+
 interface InspectionProps {
   machineId: string;
   machineType: string;
@@ -52,9 +54,47 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
   };
 
   const updateAnswer = (key: string, value: any) => {
+    if (status === "completed") return;
+
     const updated = { ...answers, [key]: value };
     setAnswers(updated);
     saveInspection(updated);
+  };
+
+  const completeInspection = async () => {
+    const pwd = prompt("Enter password to complete inspection:");
+    if (pwd !== COMPLETE_PASSWORD) {
+      alert("Incorrect password");
+      return;
+    }
+
+    setStatus("completed");
+    await setDoc(
+      inspectionRef,
+      {
+        status: "completed",
+        completedOn: Timestamp.now()
+      },
+      { merge: true }
+    );
+  };
+
+  const reopenInspection = async () => {
+    const pwd = prompt("Enter password to reopen inspection:");
+    if (pwd !== COMPLETE_PASSWORD) {
+      alert("Incorrect password");
+      return;
+    }
+
+    setStatus("draft");
+    await setDoc(
+      inspectionRef,
+      {
+        status: "draft",
+        reopenedOn: Timestamp.now()
+      },
+      { merge: true }
+    );
   };
 
   if (!template) {
@@ -69,9 +109,29 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
     <div className="container">
       <div className="card">
         <h2>{template.title}</h2>
+
         <p className="text-muted">
-          Status: <strong>{status.toUpperCase()}</strong>
+          Status:{" "}
+          <strong
+            style={{
+              color: status === "completed" ? "#16a34a" : "#d97706"
+            }}
+          >
+            {status.toUpperCase()}
+          </strong>
         </p>
+
+        {status === "draft" && (
+          <button className="mt-2" onClick={completeInspection}>
+            Complete Inspection
+          </button>
+        )}
+
+        {status === "completed" && (
+          <button className="mt-2" onClick={reopenInspection}>
+            Reopen Inspection
+          </button>
+        )}
       </div>
 
       {template.sections.map((section: any) => (
@@ -85,6 +145,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
               {field.type === "text" && (
                 <input
                   type="text"
+                  disabled={status === "completed"}
                   value={answers[field.key] || ""}
                   onChange={(e) =>
                     updateAnswer(field.key, e.target.value)
@@ -95,6 +156,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
               {field.type === "number" && (
                 <input
                   type="number"
+                  disabled={status === "completed"}
                   value={answers[field.key] || ""}
                   onChange={(e) =>
                     updateAnswer(field.key, e.target.value)
@@ -105,6 +167,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
               {field.type === "checkbox" && (
                 <input
                   type="checkbox"
+                  disabled={status === "completed"}
                   checked={answers[field.key] || false}
                   onChange={(e) =>
                     updateAnswer(field.key, e.target.checked)
@@ -123,6 +186,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
                       {part.type === "text" && (
                         <input
                           type="text"
+                          disabled={status === "completed"}
                           value={answers[compoundKey] || ""}
                           onChange={(e) =>
                             updateAnswer(
@@ -136,6 +200,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
                       {part.type === "number" && (
                         <input
                           type="number"
+                          disabled={status === "completed"}
                           value={answers[compoundKey] || ""}
                           onChange={(e) =>
                             updateAnswer(
@@ -149,6 +214,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
                       {part.type === "checkbox" && (
                         <input
                           type="checkbox"
+                          disabled={status === "completed"}
                           checked={answers[compoundKey] || false}
                           onChange={(e) =>
                             updateAnswer(
