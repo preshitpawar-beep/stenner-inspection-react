@@ -11,9 +11,17 @@ interface Machine {
 
 interface MachineProps {
   machineId: string;
+  machineType: string;
+  onBack: () => void;
+  onOpenInspection: () => void;
 }
 
-export default function Machine({ machineId }: MachineProps) {
+export default function Machine({
+  machineId,
+  machineType,
+  onBack,
+  onOpenInspection
+}: MachineProps) {
   const [machine, setMachine] = useState<Machine | null>(null);
 
   useEffect(() => {
@@ -45,6 +53,10 @@ export default function Machine({ machineId }: MachineProps) {
 
   return (
     <div className="container">
+      <button className="mb-2" onClick={onBack}>
+        ← Back
+      </button>
+
       <div className="card">
         <h2>
           {machine.type} {machine.serial && `- ${machine.serial}`}
@@ -56,9 +68,10 @@ export default function Machine({ machineId }: MachineProps) {
 
       <div className="card">
         <h3>Inspections</h3>
-        <p className="text-muted">
-          Inspection sheets will appear here (ST100R for now).
-        </p>
+
+        <button onClick={onOpenInspection}>
+          Open {machineType} Inspection
+        </button>
       </div>
     </div>
   );
