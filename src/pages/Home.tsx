@@ -11,7 +11,11 @@ interface Machine {
   createdOn: Date;
 }
 
-export default function Home() {
+interface HomeProps {
+  onOpenMachine: (machineId: string, machineType: string) => void;
+}
+
+export default function Home({ onOpenMachine }: HomeProps) {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [type, setType] = useState("");
   const [serial, setSerial] = useState("");
@@ -94,7 +98,12 @@ export default function Home() {
           )}
 
           {machines.map((m) => (
-            <div key={m.id} className="card">
+            <div
+              key={m.id}
+              className="card"
+              style={{ cursor: "pointer" }}
+              onClick={() => onOpenMachine(m.id, m.type)}
+            >
               <strong>
                 {m.type} {m.serial && `- ${m.serial}`}
               </strong>
