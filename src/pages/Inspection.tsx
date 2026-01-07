@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { doc, setDoc, getDoc, Timestamp } from "firebase/firestore";
-import { db } from "../firebase/firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, storage } from "../firebase/firebase";
 import { ST100R_TEMPLATE } from "../templates/st100r";
 
 const COMPLETE_PASSWORD = "Stenner@Complete";
@@ -14,6 +15,8 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
   const [template, setTemplate] = useState<any>(null);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [status, setStatus] = useState<"draft" | "completed">("draft");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   const inspectionRef = doc(
     db,
@@ -37,6 +40,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
       const data = snap.data();
       setAnswers(data.answers || {});
       setStatus(data.status || "draft");
+      setPhotos(data.photos || []);
     }
   };
 
@@ -47,6 +51,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
         machineType,
         answers: updatedAnswers,
         status,
+        photos,
         updatedOn: Timestamp.now()
       },
       { merge: true }
@@ -59,6 +64,32 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
     const updated = { ...answers, [key]: value };
     setAnswers(updated);
     saveInspection(updated);
+  };
+
+  const uploadPhoto = async (file: File) => {
+    setUploading(true);
+
+    const fileRef = ref(
+      storage,
+      `machines/${machineId}/inspections/${machineType}/${Date.now()}_${file.name}`
+    );
+
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+
+    const updatedPhotos = [...photos, url];
+    setPhotos(updatedPhotos);
+
+    await setDoc(
+      inspectionRef,
+      {
+        photos: updatedPhotos,
+        updatedOn: Timestamp.now()
+      },
+      { merge: true }
+    );
+
+    setUploading(false);
   };
 
   const completeInspection = async () => {
@@ -111,14 +142,7 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
         <h2>{template.title}</h2>
 
         <p className="text-muted">
-          Status:{" "}
-          <strong
-            style={{
-              color: status === "completed" ? "#16a34a" : "#d97706"
-            }}
-          >
-            {status.toUpperCase()}
-          </strong>
+          Status: <strong>{status.toUpperCase()}</strong>
         </p>
 
         {status === "draft" && (
@@ -132,6 +156,47 @@ export default function Inspection({ machineId, machineType }: InspectionProps) 
             Reopen Inspection
           </button>
         )}
+      </div>
+
+      {/* PHOTO UPLOAD */}
+      <div className="card">
+        <h3>Inspection Photos</h3>
+
+        {status === "draft" && (
+          <input
+            type="file"
+            accept="image/*"
+            disabled={uploading}
+            onChange={(e) => {
+              if (e.target.files?.[0]) {
+                uploadPhoto(e.target.files[0]);
+              }
+            }}
+          />
+        )}
+
+        {uploading && <p className="text-muted">Uploading photo…</p>}
+
+        {photos.length === 0 && (
+          <p className="text-muted">No photos uploaded.</p>
+        )}
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {photos.map((url, i) => (
+            <img
+              key={i}
+              src={url}
+              alt="Inspection"
+              style={{
+                width: 120,
+                height: 120,
+                objectFit: "cover",
+                borderRadius: 8,
+                border: "1px solid #e5e7eb"
+              }}
+            />
+          ))}
+        </div>
       </div>
 
       {template.sections.map((section: any) => (
